@@ -372,6 +372,10 @@ func (c *CSeq) String() string {
 func (c *CSeq) Parse(str string) error {
 	c.raw = str
 	arr1 := strings.Split(str, " ")
+	if len(arr1) < 2 {
+		fmt.Println("parse cseq faield:", str)
+		return errors.New("parse cseq faield:" + str)
+	}
 	n, err := strconv.ParseInt(arr1[0], 10, 64)
 	if err != nil {
 		fmt.Println("parse cseq faield:", str)
@@ -661,7 +665,7 @@ func (a *Authorization) Parse(str string) error {
 			a.response = v
 		}
 		if strings.Contains(tmp[0], "algorithm") {
-			a.algorithm = strings.Trim(v,"H:")
+			a.algorithm = strings.Trim(v, "H:")
 		}
 	}
 	return nil

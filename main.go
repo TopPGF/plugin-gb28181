@@ -65,6 +65,7 @@ var config = struct {
 	Serial            string
 	Realm             string
 	ListenAddr        string
+	ListenTcpAddr     string
 	Expires           int
 	MediaPort         uint16
 	AutoInvite        bool
@@ -75,7 +76,7 @@ var config = struct {
 	PreFetchRecord    bool
 	Username          string
 	Password          string
-}{"34020000002000000001", "3402000000", "127.0.0.1:5060", 3600, 58200, false, true, nil, 30, 600, false, "", ""}
+}{"34020000002000000001", "3402000000", "127.0.0.1:5060", "127.0.0.1:5061", 3600, 58200, false, true, nil, 30, 600, false, "", ""}
 
 func init() {
 	engine.InstallPlugin(&engine.PluginConfig{
@@ -87,24 +88,7 @@ func init() {
 }
 
 func run() {
-	ipAddr, err := net.ResolveUDPAddr("", config.ListenAddr)
-	if err != nil {
-		log.Fatal(err)
-	}
-	Print(Green("server gb28181 start at"), BrightBlue(config.ListenAddr))
-	for _, id := range config.Ignore {
-		Ignores[id] = struct{}{}
-	}
 	config := &transaction.Config{
-		SipIP:             ipAddr.IP.String(),
-		SipPort:           uint16(ipAddr.Port),
-		SipNetwork:        "UDP",
-		Serial:            config.Serial,
-		Realm:             config.Realm,
-		Username:          config.Username,
-		Password:          config.Password,
-		AckTimeout:        10,
-		MediaIP:           ipAddr.IP.String(),
 		RegisterValidity:  config.Expires,
 		RegisterInterval:  60,
 		HeartbeatInterval: 60,
@@ -188,13 +172,48 @@ func run() {
 			w.WriteHeader(404)
 		}
 	})
+	go listenUDPCode()
+	go listenTCPCode()
+	go listenMedia()
+}
+
+func listenUDPCode() {
+	ipAddr, err := net.ResolveUDPAddr("", config.ListenAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for _, id := range config.Ignore {
+		Ignores[id] = struct{}{}
+	}
+	config := &transaction.Config{
+		SipIP:             ipAddr.IP.String(),
+		SipPort:           uint16(ipAddr.Port),
+		SipNetwork:        "UDP",
+		Serial:            config.Serial,
+		Realm:             config.Realm,
+		Username:          config.Username,
+		Password:          config.Password,
+		AckTimeout:        10,
+		MediaIP:           ipAddr.IP.String(),
+		RegisterValidity:  config.Expires,
+		RegisterInterval:  60,
+		HeartbeatInterval: 60,
+		HeartbeatRetry:    3,
+		AudioEnable:       true,
+		WaitKeyFrame:      true,
+		MediaIdleTimeout:  30,
+		CatalogInterval:   config.CatalogInterval,
+		RemoveBanInterval: config.RemoveBanInterval,
+	}
 	s := transaction.NewCore(config)
+	Print(Green("server gb28181 start at"), BrightBlue(config.SipIP), BrightBlue(config.SipPort), BrightBlue(config.SipNetwork))
 	s.OnRegister = func(msg *sip.Message) {
 		id := msg.From.Uri.UserInfo()
 		storeDevice := func() {
 			var d *Device
 
-			if _d, loaded := Devices.LoadOrStore(id,&Device{
+			if _d, loaded := Devices.LoadOrStore(id, &Device{
 				ID:           id,
 				RegisterTime: time.Now(),
 				UpdateTime:   time.Now(),
@@ -210,7 +229,9 @@ func run() {
 				d.UpdateTime = time.Now()
 				d.from = &sip.Contact{Uri: msg.StartLine.Uri, Params: make(map[string]string)}
 				d.to = msg.To
+				d.Core = s
 				d.Addr = msg.Via.GetSendBy()
+				log.Println(Green("Device"), BrightBlue(d.ID), Green("Register Update From"), BrightBlue(d.Addr), BrightBlue(s.SipNetwork))
 			}
 		}
 		// 不需要密码情况
@@ -237,7 +258,6 @@ func run() {
 		if msg.Authorization.GetUsername() == id {
 			username = id
 		}
-
 		if DeviceRegisterCount[id] >= MaxRegisterCount {
 			s.Send(msg.BuildResponse(403))
 			return
@@ -310,11 +330,171 @@ func run() {
 	//		}
 	//	})
 	//})
-	go listenMedia()
+	//go listenMedia()
 	// go queryCatalog(config)
 	if config.Username != "" || config.Password != "" {
 		go removeBanDevice(config)
 	}
+	s.Start()
+}
+
+func listenTCPCode() {
+	ipAddr, err := net.ResolveTCPAddr("", config.ListenTcpAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, id := range config.Ignore {
+		Ignores[id] = struct{}{}
+	}
+	config := &transaction.Config{
+		SipIP:             ipAddr.IP.String(),
+		SipPort:           uint16(ipAddr.Port),
+		SipNetwork:        "TCP",
+		Serial:            config.Serial,
+		Realm:             config.Realm,
+		Username:          config.Username,
+		Password:          config.Password,
+		AckTimeout:        10,
+		MediaIP:           ipAddr.IP.String(),
+		RegisterValidity:  config.Expires,
+		RegisterInterval:  60,
+		HeartbeatInterval: 60,
+		HeartbeatRetry:    3,
+		AudioEnable:       true,
+		WaitKeyFrame:      true,
+		MediaIdleTimeout:  30,
+		CatalogInterval:   config.CatalogInterval,
+		RemoveBanInterval: config.RemoveBanInterval,
+	}
+	s := transaction.NewCore(config)
+	Print(Green("server gb28181 start at"), BrightBlue(config.SipIP), BrightBlue(config.SipPort), BrightBlue(config.SipNetwork))
+	s.OnRegister = func(msg *sip.Message) {
+		id := msg.From.Uri.UserInfo()
+		storeDevice := func() {
+			var d *Device
+
+			if _d, loaded := Devices.LoadOrStore(id, &Device{
+				ID:           id,
+				RegisterTime: time.Now(),
+				UpdateTime:   time.Now(),
+				Status:       string(sip.REGISTER),
+				Core:         s,
+				from:         &sip.Contact{Uri: msg.StartLine.Uri, Params: make(map[string]string)},
+				to:           msg.To,
+				Addr:         msg.Via.GetSendBy(),
+				SipIP:        config.MediaIP,
+				channelMap:   make(map[string]*Channel),
+			}); loaded {
+				d = _d.(*Device)
+				d.UpdateTime = time.Now()
+				d.Core = s
+				d.from = &sip.Contact{Uri: msg.StartLine.Uri, Params: make(map[string]string)}
+				d.to = msg.To
+				d.Addr = msg.Via.GetSendBy()
+				log.Println(Green("Device"), BrightBlue(d.ID), Green("Register Update From"), BrightBlue(d.Addr), BrightBlue(s.SipNetwork))
+			}
+		}
+		// 不需要密码情况
+		if config.Username == "" && config.Password == "" {
+			storeDevice()
+			return
+		}
+		sendUnauthorized := func() {
+			response := msg.BuildResponseWithPhrase(401, "Unauthorized")
+			if DeviceNonce[id] == "" {
+				nonce := utils.RandNumString(32)
+				DeviceNonce[id] = nonce
+			}
+			response.WwwAuthenticate = sip.NewWwwAuthenticate(s.Realm, DeviceNonce[id], sip.DIGEST_ALGO_MD5)
+			s.Send(response)
+		}
+		// 需要密码情况 设备第一次上报，返回401和加密算法
+		if msg.Authorization == nil || msg.Authorization.GetUsername() == "" {
+			sendUnauthorized()
+			return
+		}
+		// 有些摄像头没有配置用户名的地方，用户名就是摄像头自己的国标id
+		username := config.Username
+		if msg.Authorization.GetUsername() == id {
+			username = id
+		}
+		if DeviceRegisterCount[id] >= MaxRegisterCount {
+			s.Send(msg.BuildResponse(403))
+			return
+		}
+
+		// 设备第二次上报，校验
+		if !msg.Authorization.Verify(username, config.Password, config.Realm, DeviceNonce[id]) {
+			sendUnauthorized()
+			DeviceRegisterCount[id] += 1
+			return
+		}
+		storeDevice()
+		delete(DeviceNonce, id)
+		delete(DeviceRegisterCount, id)
+	}
+	s.OnMessage = func(msg *sip.Message) bool {
+		if v, ok := Devices.Load(msg.From.Uri.UserInfo()); ok {
+			d := v.(*Device)
+			if d.Status == string(sip.REGISTER) {
+				d.Status = "ONLINE"
+				go d.Query()
+			}
+			d.UpdateTime = time.Now()
+			temp := &struct {
+				XMLName    xml.Name
+				CmdType    string
+				DeviceID   string
+				DeviceList []*Channel `xml:"DeviceList>Item"`
+				RecordList []*Record  `xml:"RecordList>Item"`
+			}{}
+			decoder := xml.NewDecoder(bytes.NewReader([]byte(msg.Body)))
+			decoder.CharsetReader = charset.NewReaderLabel
+			err := decoder.Decode(temp)
+			if err != nil {
+				err = utils.DecodeGbk(temp, []byte(msg.Body))
+				if err != nil {
+					log.Printf("decode catelog err: %s", err)
+				}
+			}
+			switch temp.XMLName.Local {
+			case "Notify":
+				switch temp.CmdType {
+				case "Keeyalive":
+					if d.subscriber.CallID != "" && time.Now().After(d.subscriber.Timeout) {
+						go d.Subscribe()
+					}
+					d.CheckSubStream()
+				case "Catalog":
+					d.UpdateChannels(temp.DeviceList)
+				}
+			case "Response":
+				switch temp.CmdType {
+				case "Catalog":
+					d.UpdateChannels(temp.DeviceList)
+				case "RecordInfo":
+					d.UpdateRecord(temp.DeviceID, temp.RecordList)
+				}
+			}
+			return true
+		}
+		return false
+	}
+	//OnStreamClosedHooks.AddHook(func(stream *Stream) {
+	//	Devices.Range(func(key, value interface{}) bool {
+	//		device:=value.(*Device)
+	//		for _,channel := range device.Channels {
+	//			if stream.StreamPath == channel.RecordSP {
+	//
+	//			}
+	//		}
+	//	})
+	//})
+	//go listenMedia()
+	// go queryCatalog(config)
+	// if config.Username != "" || config.Password != "" {
+	// 	go removeBanDevice(config)
+	// }
 	s.Start()
 }
 func listenMedia() {

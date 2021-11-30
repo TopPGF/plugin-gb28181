@@ -3,6 +3,7 @@ package sip
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -39,7 +40,7 @@ type Message struct {
 	Body            string
 	Addr            string
 	Event           string
-	Date						time.Time
+	Date            time.Time
 	WwwAuthenticate *WwwAuthenticate //gb28181 密码验证 上级发给下级是WwwAuthenticate；下级发给上级是Authorization
 }
 
@@ -58,7 +59,7 @@ func (m *Message) BuildResponseWithPhrase(code int, phrase string) *Message {
 		CSeq:        m.CSeq,
 		Via:         m.Via,
 		MaxForwards: m.MaxForwards,
-		UserAgent: "Monibuca",
+		UserAgent:   "Monibuca",
 		StartLine: &StartLine{
 			Code:   code,
 			phrase: phrase,
@@ -383,7 +384,9 @@ func Decode(data []byte) (msg *Message, err error) {
 		case "event":
 			msg.Event = v
 		default:
-			fmt.Printf("invalid sip head: %s,%s\n", k, v)
+			log.Println("invalid sip head: " + k + "," + v)
+			//fmt.Printf("invalid sip head: %s,%s\n", k, v)
+			return nil, errors.New("invalid sip head: " + k + "," + v)
 		}
 	}
 	return
@@ -462,7 +465,7 @@ func Encode(msg *Message) ([]byte, error) {
 		sb.WriteString("Date: ")
 		sb.WriteString(msg.Date.Format("2006-01-02T15:04:05.999"))
 		sb.WriteString(CRLF)
-	}	
+	}
 	if msg.Event != "" {
 		sb.WriteString("Event: ")
 		sb.WriteString(msg.Event)
